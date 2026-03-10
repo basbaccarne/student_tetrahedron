@@ -1,2 +1,8 @@
-# student_tetrahedron
-A open-ended smart tetrahedron to improve professor - student interactions
+# Student Tetrahedron
+**An open-ended smart status indicator for more aware, responsive classrooms.**   
+*Designed with* 🔥 *and* ❤️ *by Bas Baccarne*   
+
+Managing medium to large classrooms is hard. Students progress at different speeds, have different support needs, and communicate differently. Some ask for help immediately, others sit quietly for far too long.
+The **Student Tetrahedron** is a physical status indicator that sits on each student's desk. Instead of keeping an arm raised for twenty minutes, students simply rotate their tetrahedron to signal their current state. At a glance, a teacher can read the color patterns across the room and immediately understand where the class stands. Who's stuck, who's done, who needs a nudge?   
+
+The system is designed to be **modular and adaptable**. With only four sides, the cognitive load stays low. Each face can be customized to match the specific needs, language, and sensitivities of a course or context.
