@@ -40,7 +40,7 @@ My laser cut settings:
 * Add programming pins to the pcb
 
 ## tests
-* [Arduino Nano 33IOT orientation test](/tests/orientation/orientation__33.ino)
+* [Arduino Nano 33IOT orientation test](tests\orientation\orientation_33.ino)
 
 ## License
 This repository contains both software and design materials created as part of an industrial design energineering project at Ghent University.
