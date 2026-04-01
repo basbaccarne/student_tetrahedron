@@ -1,17 +1,6 @@
 /*
-  Student Tetrahedron — Orientation Detection
+  Student Tetrahedron — Orientation Detection (Robust Version)
   Hardware : XOAO MINI ESP32S + MPU6050 via I2C
-  Libraries: Adafruit_MPU6050, Adafruit_Sensor, Wire
-
-  Note: MPU6050 via Adafruit library returns acceleration in m/s²
-        so gravity = ~9.81 instead of ~1.0
-
-  BLE face values:
-    0 = I'm good       (GREEN)
-    1 = I need help    (RED)
-    2 = I need a break (ORANGE)
-    3 = I'm ready      (BLUE)
-  255 = rotating / unstable
 */
 
 #include <Adafruit_MPU6050.h>
@@ -20,60 +9,54 @@
 
 Adafruit_MPU6050 mpu;
 
-// ── Configuration
-// ─────────────────────────────────────────────────────────────
+// ── Configuration ────────────────────────────────────────────────────────────
 
-#define CALIBRATE false  // set false once vectors are filled in
+#define CALIBRATE false   // Set true to see raw values in Serial Monitor
+#define SAMPLES 10        // Number of readings to average
+#define DEBOUNCE_COUNT 5  // How many stable readings before switching faces
 
-#define SAMPLES 8
-#define MATCH_THRESHOLD_DEG 15.0f
-#define DEBOUNCE_COUNT 4
-
-// Gravity in m/s² — accept readings between 8.5 and 11.0 as valid
-#define MIN_MAG 8.5f
-#define MAX_MAG 11.0f
-
-// ── Calibrated face vectors
-// ─────────────────────────────────────────────────── Run with CALIBRATE true,
-// place each face flat, note the stable readings. Paste them here, then set
-// CALIBRATE false. Values are in m/s² (gravity ≈ 9.81)
+// Safety gates: Only ignore readings if they are wildly outside gravity
+// (e.g., when being shaken or thrown).
+// Your 12.62 reading fits comfortably inside 5.0 - 15.0.
+#define MIN_MAG 5.0f
+#define MAX_MAG 15.0f
 
 struct Vec3 {
   float x, y, z;
 };
 
+// ── Calibrated Face Vectors ──────────────────────────────────────────────────
+// These are your specific readings. Magnitude doesn't matter anymore,
+// just the "direction" they point.
 const Vec3 FACE_VECTORS[4] = {
-    {0.660f, 0.087f,
-     7.796f},  // Face 0 → I'm good       — REPLACE with calibrated value
-    {9.24f, 0.00f,
-     -3.27f},  // Face 1 → I need help    — REPLACE with calibrated value
-    {-4.62f, 8.00f,
-     -3.27f},  // Face 2 → I need a break — REPLACE with calibrated value
-    {-4.62f, -8.00f,
-     -3.27f},  // Face 3 → I'm ready      — REPLACE with calibrated value
+    {0.494f, 0.040f, -12.610f},  // Face 0: Green
+    {-7.802f, -4.533f, 0.600f},  // Face 1: Red
+    {0.720f, 9.341f, 0.913f},    // Face 2: Orange
+    {8.239f, -5.002f, 0.883f}    // Face 3: Blue
 };
 
 const char* FACE_NAMES[4] = {
-    "I'm good       (GREEN)  → 0",
-    "I need help    (RED)    → 1",
-    "I need a break (ORANGE) → 2",
-    "I'm ready      (BLUE)   → 3",
-};
+    "I'm good       (GREEN)  -> 0", "I need help    (RED)    -> 1",
+    "I need a break (ORANGE) -> 2", "I'm ready      (BLUE)   -> 3"};
 
-// ── Helpers
-// ───────────────────────────────────────────────────────────────────
+// ── Math Helpers ─────────────────────────────────────────────────────────────
 
 float magnitude(Vec3 v) { return sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
 Vec3 normalize(Vec3 v) {
   float m = magnitude(v);
+  if (m < 0.001f) return {0, 0, 0};
   return {v.x / m, v.y / m, v.z / m};
 }
 
 float angleDeg(Vec3 a, Vec3 b) {
-  float dot = constrain(a.x * b.x + a.y * b.y + a.z * b.z, -1.0f, 1.0f);
-  return degrees(acos(dot));
+  Vec3 na = normalize(a);
+  Vec3 nb = normalize(b);
+  float dot = na.x * nb.x + na.y * nb.y + na.z * nb.z;
+  return degrees(acos(constrain(dot, -1.0f, 1.0f)));
 }
+
+// ── Core Logic ───────────────────────────────────────────────────────────────
 
 Vec3 readSmoothed() {
   float sx = 0, sy = 0, sz = 0;
@@ -83,107 +66,83 @@ Vec3 readSmoothed() {
     sx += a.acceleration.x;
     sy += a.acceleration.y;
     sz += a.acceleration.z;
-    delay(10);
+    delay(5);
   }
   return {sx / SAMPLES, sy / SAMPLES, sz / SAMPLES};
 }
 
 int detectFace(Vec3 reading) {
   float mag = magnitude(reading);
+
+  // If the sensor is experiencing heavy motion, return "unstable"
   if (mag < MIN_MAG || mag > MAX_MAG) return -1;
-  Vec3 norm = normalize(reading);
-  int best = -1;
-  float bestAngle = MATCH_THRESHOLD_DEG;
+
+  int bestFace = -1;
+  float minAngle = 180.0f;  // Start with max possible angle
+
   for (int i = 0; i < 4; i++) {
-    float angle = angleDeg(norm, normalize(FACE_VECTORS[i]));
-    if (angle < bestAngle) {
-      bestAngle = angle;
-      best = i;
+    float angle = angleDeg(reading, FACE_VECTORS[i]);
+    if (angle < minAngle) {
+      minAngle = angle;
+      bestFace = i;
     }
   }
-  return best;
+
+  // Sanity check: If the nearest face is > 50 deg away, it's tilted awkwardly
+  if (minAngle > 50.0f) return -1;
+
+  return bestFace;
 }
 
-// ── State
-// ─────────────────────────────────────────────────────────────────────
+// ── State ────────────────────────────────────────────────────────────────────
 
 int currentFace = -2;
 int candidateFace = -1;
 int debounceCount = 0;
-
-// ── Setup
-// ─────────────────────────────────────────────────────────────────────
 
 void setup() {
   Serial.begin(115200);
   while (!Serial) delay(10);
 
   if (!mpu.begin()) {
-    Serial.println("ERROR: MPU6050 not found");
-    while (true) delay(10);
+    Serial.println("ERROR: MPU6050 not found!");
+    while (1) delay(10);
   }
 
-  mpu.setAccelerometerRange(
-      MPU6050_RANGE_2_G);  // ±2g is plenty for orientation
-  mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+  mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
-  Serial.println("Student Tetrahedron — MPU6050");
-  if (CALIBRATE) {
-    Serial.println(
-        "CALIBRATION MODE — place each face flat, wait for stable reading");
-    Serial.println("---");
-  }
+  Serial.println("Tetrahedron Ready.");
 }
-
-// ── Loop
-// ──────────────────────────────────────────────────────────────────────
 
 void loop() {
   Vec3 reading = readSmoothed();
 
-  // ── Calibration mode ──────────────────────────────────────────────────────
   if (CALIBRATE) {
-    static float sx = 0, sy = 0, sz = 0;
-    static int n = 0;
-    sx += reading.x;
-    sy += reading.y;
-    sz += reading.z;
-    n++;
-    if (n >= 10) {
-      float mag = magnitude({sx / n, sy / n, sz / n});
-      Serial.print("ax=");
-      Serial.print(sx / n, 3);
-      Serial.print(" ay=");
-      Serial.print(sy / n, 3);
-      Serial.print(" az=");
-      Serial.print(sz / n, 3);
-      Serial.print("  |mag=");
-      Serial.println(mag, 3);
-      sx = 0;
-      sy = 0;
-      sz = 0;
-      n = 0;
-    }
+    float mag = magnitude(reading);
+    Serial.printf("ax=%.3f ay=%.3f az=%.3f | mag=%.3f\n", reading.x, reading.y,
+                  reading.z, mag);
+    delay(200);
     return;
   }
 
-  // ── Detection mode ────────────────────────────────────────────────────────
   int detected = detectFace(reading);
 
+  // Debounce Logic
   if (detected == candidateFace) {
     debounceCount++;
   } else {
     candidateFace = detected;
-    debounceCount = 1;
+    debounceCount = 0;
   }
 
   if (debounceCount >= DEBOUNCE_COUNT && detected != currentFace) {
     currentFace = detected;
-    Serial.print("Face: ");
-    if (currentFace == -1)
-      Serial.println("(rotating / unstable)");
-    else
+    if (currentFace == -1) {
+      Serial.println("STATE: Moving / Unstable (255)");
+    } else {
+      Serial.print("STATE: ");
       Serial.println(FACE_NAMES[currentFace]);
+    }
   }
 }
